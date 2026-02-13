@@ -58,8 +58,7 @@ Gate 0 high thresh = 10 00 uint16_t 0x0010, Threshold value = 60 EA 00 00 uint32
 Gate 0 low thresh = 20 00 uint16_t 0x0020, Threshold value = 60 EA 00 00 uint32_t 0x0000EA60
 */
 
-namespace esphome {
-namespace ld2420 {
+namespace esphome::ld2420 {
 
 static const char *const TAG = "ld2420";
 
@@ -205,8 +204,10 @@ void LD2420Component::dump_config() {
   LOG_BUTTON("  ", "Factory Reset:", this->factory_reset_button_);
   LOG_BUTTON("  ", "Restart Module:", this->restart_module_button_);
 #endif
+#ifdef USE_SELECT
   ESP_LOGCONFIG(TAG, "Select:");
   LOG_SELECT("  ", "Operating Mode", this->operating_selector_);
+#endif
   if (ld2420::get_firmware_int(this->firmware_ver_) < CALIBRATE_VERSION_MIN) {
     ESP_LOGW(TAG, "Firmware version %s and older supports Simple Mode only", this->firmware_ver_);
   }
@@ -238,12 +239,20 @@ void LD2420Component::setup() {
   memcpy(&this->new_config, &this->current_config, sizeof(this->current_config));
   if (ld2420::get_firmware_int(this->firmware_ver_) < CALIBRATE_VERSION_MIN) {
     this->set_operating_mode(OP_SIMPLE_MODE_STRING);
-    this->operating_selector_->publish_state(OP_SIMPLE_MODE_STRING);
+#ifdef USE_SELECT
+    if (this->operating_selector_ != nullptr) {
+      this->operating_selector_->publish_state(OP_SIMPLE_MODE_STRING);
+    }
+#endif
     this->set_mode_(CMD_SYSTEM_MODE_SIMPLE);
     ESP_LOGW(TAG, "Firmware version %s and older supports Simple Mode only", this->firmware_ver_);
   } else {
     this->set_mode_(CMD_SYSTEM_MODE_ENERGY);
-    this->operating_selector_->publish_state(OP_NORMAL_MODE_STRING);
+#ifdef USE_SELECT
+    if (this->operating_selector_ != nullptr) {
+      this->operating_selector_->publish_state(OP_NORMAL_MODE_STRING);
+    }
+#endif
   }
 #ifdef USE_NUMBER
   this->init_gate_config_numbers();
@@ -326,9 +335,10 @@ void LD2420Component::revert_config_action() {
 
 void LD2420Component::loop() {
   // If there is a active send command do not process it here, the send command call will handle it.
-  while (!this->cmd_active_ && this->available()) {
-    this->readline_(this->read(), this->buffer_data_, MAX_LINE_LENGTH);
+  if (this->cmd_active_) {
+    return;
   }
+  this->read_batch_(this->buffer_data_);
 }
 
 void LD2420Component::update_radar_data(uint16_t const *gate_energy, uint8_t sample_number) {
@@ -383,8 +393,12 @@ void LD2420Component::set_operating_mode(const char *state) {
   // If unsupported firmware ignore mode select
   if (ld2420::get_firmware_int(firmware_ver_) >= CALIBRATE_VERSION_MIN) {
     this->current_operating_mode = find_uint8(OP_MODE_BY_STR, state);
-    // Entering Auto Calibrate we need to clear the privoiuos data collection
-    this->operating_selector_->publish_state(state);
+    // Entering Auto Calibrate we need to clear the previous data collection
+#ifdef USE_SELECT
+    if (this->operating_selector_ != nullptr) {
+      this->operating_selector_->publish_state(state);
+    }
+#endif
     if (current_operating_mode == OP_CALIBRATE_MODE) {
       this->set_calibration_(true);
       for (uint8_t gate = 0; gate < TOTAL_GATES; gate++) {
@@ -404,7 +418,11 @@ void LD2420Component::set_operating_mode(const char *state) {
     }
   } else {
     this->current_operating_mode = OP_SIMPLE_MODE;
-    this->operating_selector_->publish_state(OP_SIMPLE_MODE_STRING);
+#ifdef USE_SELECT
+    if (this->operating_selector_ != nullptr) {
+      this->operating_selector_->publish_state(OP_SIMPLE_MODE_STRING);
+    }
+#endif
   }
 }
 
@@ -519,6 +537,23 @@ void LD2420Component::handle_simple_mode_(const uint8_t *inbuf, int len) {
       listener->on_distance(this->get_distance_());
     for (auto &listener : this->listeners_)
       listener->on_presence(this->get_presence_());
+  }
+}
+
+void LD2420Component::read_batch_(std::span<uint8_t, MAX_LINE_LENGTH> buffer) {
+  // Read all available bytes in batches to reduce UART call overhead.
+  size_t avail = this->available();
+  uint8_t buf[MAX_LINE_LENGTH];
+  while (avail > 0) {
+    size_t to_read = std::min(avail, sizeof(buf));
+    if (!this->read_array(buf, to_read)) {
+      break;
+    }
+    avail -= to_read;
+
+    for (size_t i = 0; i < to_read; i++) {
+      this->readline_(buf[i], buffer.data(), buffer.size());
+    }
   }
 }
 
@@ -880,5 +915,4 @@ void LD2420Component::refresh_gate_config_numbers() {
 
 #endif
 
-}  // namespace ld2420
-}  // namespace esphome
+}  // namespace esphome::ld2420

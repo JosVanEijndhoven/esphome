@@ -4,6 +4,7 @@
 #include "esphome/components/uart/uart.h"
 #include "esphome/core/automation.h"
 #include "esphome/core/helpers.h"
+#include <span>
 #ifdef USE_TEXT_SENSOR
 #include "esphome/components/text_sensor/text_sensor.h"
 #endif
@@ -17,8 +18,7 @@
 #include "esphome/components/button/button.h"
 #endif
 
-namespace esphome {
-namespace ld2420 {
+namespace esphome::ld2420 {
 
 static const uint8_t CALIBRATE_SAMPLES = 64;
 static const uint8_t MAX_LINE_LENGTH = 46;  // Max characters for serial buffer
@@ -166,6 +166,7 @@ class LD2420Component : public Component, public uart::UARTDevice {
   void handle_energy_mode_(uint8_t *buffer, int len);
   void handle_ack_data_(uint8_t *buffer, int len);
   void readline_(int rx_data, uint8_t *buffer, int len);
+  void read_batch_(std::span<uint8_t, MAX_LINE_LENGTH> buffer);
   void set_calibration_(bool state) { this->calibration_ = state; };
   bool get_calibration_() { return this->calibration_; };
 
@@ -193,5 +194,4 @@ class LD2420Component : public Component, public uart::UARTDevice {
   std::vector<LD2420Listener *> listeners_{};
 };
 
-}  // namespace ld2420
-}  // namespace esphome
+}  // namespace esphome::ld2420
