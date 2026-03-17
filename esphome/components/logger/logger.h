@@ -141,7 +141,7 @@ enum UARTSelection : uint8_t {
  * 2. Works with ESP-IDF's pthread implementation that uses a linked list for TLS variables
  * 3. Avoids the limitations of the fixed FreeRTOS task local storage slots
  */
-class Logger : public Component {
+class Logger final : public Component {
  public:
   explicit Logger(uint32_t baud_rate);
 #ifdef USE_ESPHOME_TASK_LOG_BUFFER
@@ -233,7 +233,11 @@ class Logger : public Component {
   void cdc_loop_();
 #endif
   void process_messages_();
+#if defined(USE_HOST) || defined(USE_ZEPHYR)
   void write_msg_(const char *msg, uint16_t len);
+#else
+  inline void write_msg_(const char *msg, uint16_t len);  // Defined in platform-specific logger_*.h
+#endif
 
   // Format a log message with printf-style arguments and write it to a buffer with header, footer, and null terminator
   // thread_name: name of the calling thread/task, or nullptr for main task (callers already know which task they're on)
@@ -366,7 +370,7 @@ class Logger : public Component {
   bool non_main_task_recursion_guard_{false};  // Shared guard for all non-main tasks on LibreTiny
 #endif
 #else
-  bool global_recursion_guard_{false};  // Simple global recursion guard for single-task platforms
+  bool global_recursion_guard_{false};                    // Simple global recursion guard for single-task platforms
 #endif
 
   // Large buffer placed last to keep frequently-accessed member offsets small
@@ -481,7 +485,7 @@ class Logger : public Component {
 };
 extern Logger *global_logger;  // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 
-class LoggerMessageTrigger : public Trigger<uint8_t, const char *, const char *> {
+class LoggerMessageTrigger final : public Trigger<uint8_t, const char *, const char *> {
  public:
   explicit LoggerMessageTrigger(Logger *parent, uint8_t level) : level_(level) {
     parent->add_log_callback(this,
@@ -498,3 +502,15 @@ class LoggerMessageTrigger : public Trigger<uint8_t, const char *, const char *>
 };
 
 }  // namespace esphome::logger
+
+// Platform-specific inline implementations of write_msg_()
+// Must be included after the Logger class definition is complete
+#if defined(USE_ESP32)
+#include "logger_esp32.h"
+#elif defined(USE_ESP8266)
+#include "logger_esp8266.h"
+#elif defined(USE_RP2040)
+#include "logger_rp2040.h"
+#elif defined(USE_LIBRETINY)
+#include "logger_libretiny.h"
+#endif
