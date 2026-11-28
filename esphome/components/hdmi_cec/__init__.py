@@ -58,7 +58,8 @@ def _payload_span(config: ConfigType, value: list[int]) -> str:
         # progmem_bytes gives nullptr for no bytes, and std::span has no (nullptr, 0) constructor
         return str(cg.byte_span())
     table = automation.progmem_bytes("hdmi_cec_send", value)
-    return str(cg.byte_span(table, len(value)))
+    # Qualified so a trigger or script argument of the same name cannot shadow it
+    return str(cg.byte_span(cg.RawExpression(f"::{table}"), len(value)))
 
 
 _MESSAGE_ARGS = [
