@@ -354,7 +354,7 @@ static int8_t frame_first_bit(size_t i) { return i == 0 ? 5 : 9; }
 // CEC bit low and ends the second one high; the data bits, sent least significant first, fill in
 // the rest: a logical 0 is low for three UART bits, a logical 1 for one.
 size_t encode_uart_body(const Frame &frame, uint8_t *out) {
-  static const uint8_t TWO_BITS_TO_UART_BYTE[4] PROGMEM = {0x8C, 0xEC, 0x8F, 0xEF};  // 00, 01, 10, 11
+  static constexpr uint8_t TWO_BITS_TO_UART_BYTE[4] PROGMEM = {0x8C, 0xEC, 0x8F, 0xEF};  // 00, 01, 10, 11
   size_t length = 0;
   const auto bytes = frame.bytes();
   for (size_t i = 0; i < bytes.size(); i++) {
