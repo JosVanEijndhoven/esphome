@@ -99,8 +99,11 @@ Frame::Frame(uint8_t initiator_addr, uint8_t destination_addr, std::span<const u
   this->data_[0] = ((initiator_addr & 0xf) << 4) | (destination_addr & 0xf);
   // No length clamp: send() refuses a payload over MAX_PAYLOAD_LENGTH, and the built-in replies are shorter
   this->size_ = 1 + payload.size();
-  // the payload may be a flash table (hdmi_cec.send); progmem_memcpy reads RAM too
-  progmem_memcpy(this->data_.data() + 1, payload.data(), payload.size());
+  // the payload may be a flash table (hdmi_cec.send); progmem_memcpy reads RAM too. A poll has none,
+  // and memcpy from its null data is undefined even for no bytes
+  if (!payload.empty()) {
+    progmem_memcpy(this->data_.data() + 1, payload.data(), payload.size());
+  }
 }
 
 void HDMICEC::setup() {
