@@ -61,6 +61,9 @@ INSTANTIATE_TEST_SUITE_P(
                       ReplyCase{"UnknownOpcode", TV, US, {0x8F}, false, {{0x40, 0x00, 0x8F, 0x00}}},
                       ReplyCase{"AbortIsRefused", TV, US, {0xFF}, false, {{0x40, 0x00, 0xFF, 0x04}}},
                       ReplyCase{"FeatureAbortNotAnswered", TV, US, {0x00, 0x8F, 0x00}, false, {}},
+                      // Answers to our own requests are not aborted
+                      ReplyCase{"ReportPowerStatusNotAborted", TV, US, {0x90, 0x01}, false, {}},
+                      ReplyCase{"CecVersionNotAborted", TV, US, {0x9E, 0x05}, false, {}},
                       ReplyCase{"ClaimedOpcode", TV, US, {0x44, 0x41}, false, {}},
                       ReplyCase{"Broadcast", TV, Frame::BROADCAST_ADDRESS, {0x9F}, false, {}},
                       ReplyCase{"OtherDestination", TV, 0x5, {0x9F}, false, {}},

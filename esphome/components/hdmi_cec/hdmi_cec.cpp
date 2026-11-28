@@ -48,6 +48,29 @@ static constexpr uint8_t OPCODE_GET_CEC_VERSION = 0x9F;
 static constexpr uint8_t OPCODE_CEC_VERSION = 0x9E;
 static constexpr uint8_t CEC_VERSION_1_4 = 0x05;
 
+#ifdef USE_HDMI_CEC_FEATURE_ABORT
+/// A directed answer to a request, likely one a lambda sent: never aborted, since Feature Abort is
+/// for requests the device does not support
+static bool is_response(uint8_t opcode) {
+  switch (opcode) {
+    case 0x07:  // Tuner Device Status
+    case 0x1B:  // Deck Status
+    case 0x47:  // Set OSD Name
+    case 0x7A:  // Report Audio Status
+    case 0x7E:  // System Audio Mode Status
+    case 0x8E:  // Menu Status
+    case 0x90:  // Report Power Status
+    case 0x9E:  // CEC Version
+    case 0xA3:  // Report Short Audio Descriptor
+    case 0xC1:  // Report ARC Initiated
+    case 0xC2:  // Report ARC Terminated
+      return true;
+    default:
+      return false;
+  }
+}
+#endif
+
 /// An on_message automation with a data prefix answers this opcode itself
 static bool is_claimed(uint8_t opcode) {
 #ifdef HDMI_CEC_CLAIMED_OPCODE_COUNT
@@ -173,6 +196,9 @@ void HDMICEC::reply_builtin_(const Frame *frame) {
       break;
   }
 #ifdef USE_HDMI_CEC_FEATURE_ABORT
+  if (is_response(opcode)) {
+    return;
+  }
   // Nothing here or in an automation answers it: tell the initiator, as the bus expects. <Abort> is a
   // test message that CEC requires to be refused
   this->send(source, {OPCODE_FEATURE_ABORT, opcode,
