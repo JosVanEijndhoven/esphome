@@ -49,21 +49,33 @@ static constexpr uint8_t OPCODE_CEC_VERSION = 0x9E;
 static constexpr uint8_t CEC_VERSION_1_4 = 0x05;
 
 #ifdef USE_HDMI_CEC_FEATURE_ABORT
+// Directed answers to requests, never aborted
+static constexpr uint8_t OPCODE_TUNER_DEVICE_STATUS = 0x07;
+static constexpr uint8_t OPCODE_DECK_STATUS = 0x1B;
+static constexpr uint8_t OPCODE_SET_OSD_NAME = 0x47;
+static constexpr uint8_t OPCODE_REPORT_AUDIO_STATUS = 0x7A;
+static constexpr uint8_t OPCODE_SYSTEM_AUDIO_MODE_STATUS = 0x7E;
+static constexpr uint8_t OPCODE_MENU_STATUS = 0x8E;
+static constexpr uint8_t OPCODE_REPORT_POWER_STATUS = 0x90;
+static constexpr uint8_t OPCODE_REPORT_SHORT_AUDIO_DESCRIPTOR = 0xA3;
+static constexpr uint8_t OPCODE_REPORT_ARC_INITIATED = 0xC1;
+static constexpr uint8_t OPCODE_REPORT_ARC_TERMINATED = 0xC2;
+
 /// A directed answer to a request, likely one a lambda sent: never aborted, since Feature Abort is
 /// for requests the device does not support
 static bool is_response(uint8_t opcode) {
   switch (opcode) {
-    case 0x07:  // Tuner Device Status
-    case 0x1B:  // Deck Status
-    case 0x47:  // Set OSD Name
-    case 0x7A:  // Report Audio Status
-    case 0x7E:  // System Audio Mode Status
-    case 0x8E:  // Menu Status
-    case 0x90:  // Report Power Status
-    case 0x9E:  // CEC Version
-    case 0xA3:  // Report Short Audio Descriptor
-    case 0xC1:  // Report ARC Initiated
-    case 0xC2:  // Report ARC Terminated
+    case OPCODE_TUNER_DEVICE_STATUS:
+    case OPCODE_DECK_STATUS:
+    case OPCODE_SET_OSD_NAME:
+    case OPCODE_REPORT_AUDIO_STATUS:
+    case OPCODE_SYSTEM_AUDIO_MODE_STATUS:
+    case OPCODE_MENU_STATUS:
+    case OPCODE_REPORT_POWER_STATUS:
+    case OPCODE_CEC_VERSION:
+    case OPCODE_REPORT_SHORT_AUDIO_DESCRIPTOR:
+    case OPCODE_REPORT_ARC_INITIATED:
+    case OPCODE_REPORT_ARC_TERMINATED:
       return true;
     default:
       return false;
