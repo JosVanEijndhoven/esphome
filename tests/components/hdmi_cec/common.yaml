@@ -14,6 +14,9 @@ hdmi_cec:
         - hdmi_cec.send:
             destination: 0x0
             data: !lambda return {0x90, 0x01};
+        - hdmi_cec.send:
+            destination: 0x0
+            data: []  # a poll
     - opcode: 0x8C  # Give Device Vendor ID
       then:
         - lambda: |-
