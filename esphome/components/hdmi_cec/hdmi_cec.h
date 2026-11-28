@@ -55,7 +55,7 @@ class Frame {
   static constexpr uint8_t BROADCAST_ADDRESS = 0xF;  // also the address of an unregistered device
 
   Frame() = default;
-  /// The payload, in RAM or flash, is cut to MAX_PAYLOAD_LENGTH bytes
+  /// The payload, in RAM or flash, is at most MAX_PAYLOAD_LENGTH bytes; send() checks that
   Frame(uint8_t initiator_addr, uint8_t destination_addr, std::span<const uint8_t> payload);
 
   ESPHOME_ALWAYS_INLINE uint8_t initiator_addr() const { return this->data_[0] >> 4; }
