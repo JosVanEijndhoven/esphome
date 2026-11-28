@@ -42,17 +42,18 @@ CONF_MONITOR_MODE = "monitor_mode"
 CONF_OPCODE = "opcode"
 CONF_PHYSICAL_ADDRESS = "physical_address"
 CONF_OSD_NAME = "osd_name"
+# The CEC device type of each logical address, for <Report Physical Address>: 0 TV, 1 recording
+# device, 3 tuner, 4 playback device, 5 audio system; reserved, specific use and unregistered count
+# as playback
+_DEVICE_TYPES = (0, 1, 1, 3, 4, 5, 3, 3, 4, 1, 3, 4, 4, 4, 4, 4)
+_OPCODE_SET_OSD_NAME = "\x47"  # 'G'
 
 hdmi_cec_ns = cg.esphome_ns.namespace("hdmi_cec")
 HDMICEC = hdmi_cec_ns.class_("HDMICEC", cg.Component)
-_PAYLOAD_SPAN = cg.std_span.template(cg.uint8.operator("const"))
 _PAYLOAD_VECTOR = cg.std_vector.template(cg.uint8)
 
 
 def _payload_span(config: ConfigType, value: list[int]) -> str:
-    # a constant payload stays in a shared flash table
-    if not value:
-        return str(cg.byte_span())
     table = automation.progmem_bytes("hdmi_cec_send", value)
     return str(cg.byte_span(table, len(value)))
 
@@ -60,7 +61,7 @@ def _payload_span(config: ConfigType, value: list[int]) -> str:
 _MESSAGE_ARGS = [
     (cg.uint8, "source"),
     (cg.uint8, "destination"),
-    (_PAYLOAD_SPAN, "data"),
+    (cg.byte_span, "data"),
 ]
 
 _request_message_callback_slot = cg.slot_counter("HDMI_CEC_MESSAGE_CALLBACK_COUNT")
@@ -108,9 +109,7 @@ CONFIG_SCHEMA = cv.All(
             cv.Required(CONF_PIN): pins.internal_gpio_input_pullup_pin_schema,
             cv.Required(CONF_ADDRESS): logical_address,
             # 0xFFFF is reserved: the bus uses it for "no physical address"
-            cv.Optional(CONF_PHYSICAL_ADDRESS): cv.All(
-                cv.hex_uint16_t, cv.Range(max=0xFFFE)
-            ),
+            cv.Optional(CONF_PHYSICAL_ADDRESS): cv.hex_int_range(min=0, max=0xFFFE),
             cv.Optional(CONF_OSD_NAME): cv.All(
                 cv.string_strict,
                 cv.Length(min=1, max=MAX_OSD_NAME_LENGTH),
@@ -199,7 +198,8 @@ async def to_code(config: ConfigType) -> None:
         # The acknowledge bit is released from a general purpose timer, left out of the build by default
         include_builtin_idf_component("esp_driver_gptimer")
     cec_pin = await cg.gpio_pin_expression(config[CONF_PIN])
-    var = cg.new_Pvariable(config[CONF_ID], cec_pin, config[CONF_ADDRESS])
+    address = config[CONF_ADDRESS]
+    var = cg.new_Pvariable(config[CONF_ID], cec_pin, address, _DEVICE_TYPES[address])
     await cg.register_component(var, config)
     if config[CONF_PROMISCUOUS_MODE]:
         cg.add(var.set_promiscuous_mode(True))
@@ -207,18 +207,21 @@ async def to_code(config: ConfigType) -> None:
         cg.add(var.set_monitor_mode(True))
     cg.add_optional(var.set_physical_address, config.get(CONF_PHYSICAL_ADDRESS))
     if (osd_name := config.get(CONF_OSD_NAME)) is not None:
-        cg.extern_progmem_array("esphome::hdmi_cec::OSD_NAME", cg.char, osd_name)
+        cg.extern_progmem_array(
+            "esphome::hdmi_cec::OSD_NAME_REPLY",
+            cg.char,
+            _OPCODE_SET_OSD_NAME + osd_name,
+        )
         cg.add_define("HDMI_CEC_OSD_NAME_LENGTH", len(osd_name))
-    if CONF_UART_ID in config:
+    if (uart_id := config.get(CONF_UART_ID)) is not None:
         cg.add_define("USE_HDMI_CEC_UART")
-    await cg.add_variable(var.set_uart, config.get(CONF_UART_ID))
+        cg.add(var.set_uart(await cg.get_variable(uart_id)))
 
     on_message = config.get(CONF_ON_MESSAGE, [])
     # An automation for frames addressed to us with a data prefix claims its opcode from every
     # initiator, whatever its source filter or the rest of its prefix, so the built-in replies never
     # contradict an answer it sends. One without a prefix sees every such frame, so nothing is
     # unhandled and no Feature Abort is sent
-    address = config[CONF_ADDRESS]
     for_us = [
         conf for conf in on_message if conf.get(CONF_DESTINATION, address) == address
     ]
@@ -244,38 +247,22 @@ async def to_code(config: ConfigType) -> None:
         )
 
 
+_SEND_SCHEMA = cv.Schema(
+    {
+        cv.GenerateID(): cv.use_id(HDMICEC),
+        cv.Required(CONF_DESTINATION): cv.templatable(logical_address),
+        cv.Required(CONF_DATA): cv.templatable(payload),
+    }
+)
+_SEND_ARGS = ((CONF_DESTINATION, cg.uint8), (CONF_DATA, _PAYLOAD_VECTOR, _payload_span))
+
 automation.register_apply_action(
-    "hdmi_cec.send",
-    cv.Schema(
-        {
-            cv.GenerateID(): cv.use_id(HDMICEC),
-            cv.Required(CONF_DESTINATION): cv.templatable(logical_address),
-            cv.Required(CONF_DATA): cv.templatable(payload),
-        }
-    ),
-    automation.ApplyCall(
-        "send({}, {})",
-        ((CONF_DESTINATION, cg.uint8), (CONF_DATA, _PAYLOAD_VECTOR, _payload_span)),
-    ),
+    "hdmi_cec.send", _SEND_SCHEMA, automation.ApplyCall("send({}, {})", _SEND_ARGS)
 )
 
 # A frame under another logical address, for a device that stands in for several
 automation.register_apply_action(
     "hdmi_cec.send_as",
-    cv.Schema(
-        {
-            cv.GenerateID(): cv.use_id(HDMICEC),
-            cv.Required(CONF_SOURCE): cv.templatable(logical_address),
-            cv.Required(CONF_DESTINATION): cv.templatable(logical_address),
-            cv.Required(CONF_DATA): cv.templatable(payload),
-        }
-    ),
-    automation.ApplyCall(
-        "send({}, {}, {})",
-        (
-            (CONF_SOURCE, cg.uint8),
-            (CONF_DESTINATION, cg.uint8),
-            (CONF_DATA, _PAYLOAD_VECTOR, _payload_span),
-        ),
-    ),
+    _SEND_SCHEMA.extend({cv.Required(CONF_SOURCE): cv.templatable(logical_address)}),
+    automation.ApplyCall("send({}, {}, {})", ((CONF_SOURCE, cg.uint8), *_SEND_ARGS)),
 )

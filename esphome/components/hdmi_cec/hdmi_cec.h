@@ -28,7 +28,8 @@ namespace esphome::hdmi_cec {
 
 // Generated from the configuration, in flash
 #ifdef HDMI_CEC_OSD_NAME_LENGTH
-extern const char OSD_NAME[] PROGMEM;
+// The <Set OSD Name> reply: its opcode 0x47 ('G'), then the name
+extern const char OSD_NAME_REPLY[] PROGMEM;
 #endif
 #ifdef HDMI_CEC_CLAIMED_OPCODE_COUNT
 extern const uint8_t CLAIMED_OPCODES[] PROGMEM;
@@ -37,7 +38,6 @@ extern const uint8_t CLAIMED_OPCODES[] PROGMEM;
 // Release/acquire store and load. The read-modify-write forms of std::atomic are not available on
 // every target (the ESP8266 has none), so a writer computes the new value itself; that is safe here
 // because every atomic in this component has exactly one writer.
-// The 'atomic' semantics is required here for its memory-barrier.
 template<typename T> inline ESPHOME_ALWAYS_INLINE void atomic_set(std::atomic<T> &atom, T value) {
   atom.store(value, std::memory_order_release);
 }
@@ -55,18 +55,15 @@ class Frame {
   static constexpr uint8_t BROADCAST_ADDRESS = 0xF;  // also the address of an unregistered device
 
   Frame() = default;
-  /// The payload is at most MAX_PAYLOAD_LENGTH bytes, protected in this constructor
-  Frame(uint8_t initiator_addr, uint8_t destination_addr, const uint8_t *payload, unsigned int payload_size);
-  Frame(uint8_t initiator_addr, uint8_t destination_addr, const std::initializer_list<uint8_t> &payload)
-      : Frame(initiator_addr, destination_addr, payload.begin(), payload.size()) {}
-  Frame(uint8_t initiator_addr, uint8_t destination_addr, std::span<const uint8_t> payload)
-      : Frame(initiator_addr, destination_addr, payload.data(), payload.size()) {}
+  /// The payload, in RAM or flash, is cut to MAX_PAYLOAD_LENGTH bytes
+  Frame(uint8_t initiator_addr, uint8_t destination_addr, std::span<const uint8_t> payload);
 
   ESPHOME_ALWAYS_INLINE uint8_t initiator_addr() const { return this->data_[0] >> 4; }
   ESPHOME_ALWAYS_INLINE uint8_t destination_addr() const { return this->data_[0] & 0xf; }
   ESPHOME_ALWAYS_INLINE bool is_broadcast() const { return this->destination_addr() == BROADCAST_ADDRESS; }
   ESPHOME_ALWAYS_INLINE size_t size() const { return this->size_; }
-  ESPHOME_ALWAYS_INLINE uint8_t opcode() const { return (this->size() >= 2) ? this->data_[1] : 0; }
+  // No size check: a frame without an opcode is a poll, acknowledged in the interrupt and never handled
+  ESPHOME_ALWAYS_INLINE uint8_t opcode() const { return this->data_[1]; }
   std::span<const uint8_t> bytes() const { return {this->data_.data(), this->size_}; }
   /// The bytes after the header, starting with the opcode
   std::span<const uint8_t> payload() const { return this->bytes().subspan(1); }
@@ -84,6 +81,13 @@ class Frame {
   std::array<uint8_t, MAX_LENGTH> data_{};
   uint8_t size_{0};
 };
+
+/// The most UART bytes encode_uart_body() writes: ten CEC bits per frame byte, two per UART byte,
+/// minus the initiator address
+static constexpr size_t MAX_UART_BODY_LENGTH = Frame::MAX_LENGTH * 5 - 2;
+/// The UART bytes that send a frame after its initiator address bits, at 2083 baud; returns how
+/// many it wrote to out
+size_t encode_uart_body(const Frame &frame, uint8_t *out);
 
 /// A queue of frames between one producer and one consumer, for instance the receive interrupt and
 /// loop(). The indices run freely and each is written by one side only, so no lock is needed.
@@ -118,7 +122,9 @@ template<size_t SIZE> class FrameRingBuffer {
 /// on_message automations and transmits queued frames, one blocking bit-banged attempt per pass.
 class HDMICEC : public Component {
  public:
-  HDMICEC(InternalGPIOPin *pin, uint8_t address) : pin_(pin), address_(address) {}
+  /// device_type: the CEC device type of the logical address, for <Report Physical Address>
+  HDMICEC(InternalGPIOPin *pin, uint8_t address, uint8_t device_type)
+      : pin_(pin), address_(address), device_type_(device_type) {}
   void setup() override;
   void dump_config() override;
   void loop() override;
@@ -186,7 +192,6 @@ class HDMICEC : public Component {
 
   /// The built-in replies to a frame directed at us that no automation claims
   void reply_builtin_(const Frame *frame);
-  static bool is_claimed(uint8_t opcode);
 
   // Transmit side, in loop()
   void transmit_message_();
@@ -257,6 +262,7 @@ class HDMICEC : public Component {
   bool prev_pin_level_{true};
 
   uint8_t address_;  // logical address, Frame::BROADCAST_ADDRESS when only listening
+  uint8_t device_type_;
   bool promiscuous_mode_{false};
   bool monitor_mode_{false};
 

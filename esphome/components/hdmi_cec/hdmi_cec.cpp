@@ -42,27 +42,30 @@ static constexpr uint8_t OPCODE_ABORT = 0xFF;
 static constexpr uint8_t ABORT_REASON_UNRECOGNIZED_OPCODE = 0x00;
 static constexpr uint8_t ABORT_REASON_REFUSED = 0x04;
 static constexpr uint8_t OPCODE_GIVE_OSD_NAME = 0x46;
-static constexpr uint8_t OPCODE_SET_OSD_NAME = 0x47;
 static constexpr uint8_t OPCODE_GIVE_PHYSICAL_ADDRESS = 0x83;
 static constexpr uint8_t OPCODE_REPORT_PHYSICAL_ADDRESS = 0x84;
 static constexpr uint8_t OPCODE_GET_CEC_VERSION = 0x9F;
 static constexpr uint8_t OPCODE_CEC_VERSION = 0x9E;
 static constexpr uint8_t CEC_VERSION_1_4 = 0x05;
 
-/// The CEC device type a logical address stands for, for "Report Physical Address": one nibble per
-/// address, from 0 up. 0 TV, 1 Recording Device, 3 Tuner, 4 Playback Device, 5 Audio System; the
-/// reserved, specific use and unregistered addresses count as a playback device
-static uint8_t device_type_of(uint8_t logical_address) {
-  constexpr uint64_t device_types = 0x4444431433543110ULL;
-  return (device_types >> (4 * logical_address)) & 0xF;
+/// An on_message automation with a data prefix answers this opcode itself
+static bool is_claimed(uint8_t opcode) {
+#ifdef HDMI_CEC_CLAIMED_OPCODE_COUNT
+  for (uint8_t i = 0; i < HDMI_CEC_CLAIMED_OPCODE_COUNT; i++) {
+    if (progmem_read_byte(&CLAIMED_OPCODES[i]) == opcode) {
+      return true;
+    }
+  }
+#endif
+  return false;
 }
 
-Frame::Frame(uint8_t initiator_addr, uint8_t destination_addr, const uint8_t *payload, unsigned int payload_size) {
+Frame::Frame(uint8_t initiator_addr, uint8_t destination_addr, std::span<const uint8_t> payload) {
   this->data_[0] = ((initiator_addr & 0xf) << 4) | (destination_addr & 0xf);
-  payload_size = std::min(payload_size, static_cast<unsigned int>(Frame::MAX_PAYLOAD_LENGTH));
-  this->size_ = 1 + payload_size;
+  // No length clamp: send() refuses a payload over MAX_PAYLOAD_LENGTH, and the built-in replies are shorter
+  this->size_ = 1 + payload.size();
   // the payload may be a flash table (hdmi_cec.send); progmem_memcpy reads RAM too
-  progmem_memcpy(this->data_.data() + 1, payload, payload_size);
+  progmem_memcpy(this->data_.data() + 1, payload.data(), payload.size());
 }
 
 void HDMICEC::setup() {
@@ -96,10 +99,7 @@ void HDMICEC::dump_config() {
                   low_nibble(low));
   }
 #ifdef HDMI_CEC_OSD_NAME_LENGTH
-  char name[HDMI_CEC_OSD_NAME_LENGTH + 1];
-  progmem_memcpy(name, OSD_NAME, HDMI_CEC_OSD_NAME_LENGTH);
-  name[HDMI_CEC_OSD_NAME_LENGTH] = '\0';
-  ESP_LOGCONFIG(TAG, "  OSD name: %s", name);
+  ESP_LOGCONFIG(TAG, "  OSD name: %s", LOG_STR_ARG(OSD_NAME_REPLY + 1));
 #endif
 #ifdef USE_HDMI_CEC_UART
   ESP_LOGCONFIG(TAG, "  Transmit: UART");
@@ -140,20 +140,9 @@ void HDMICEC::handle_received_message_(const Frame *frame) {
   // never answered (so an instance on the unregistered address 0xF answers nothing, though it may
   // still send), and an unregistered initiator cannot be answered directly
   if (!this->monitor_mode_ && !frame->is_broadcast() && frame->destination_addr() == this->address_ &&
-      frame->initiator_addr() != Frame::BROADCAST_ADDRESS && !HDMICEC::is_claimed(frame->opcode())) {
+      frame->initiator_addr() != Frame::BROADCAST_ADDRESS && !is_claimed(frame->opcode())) {
     this->reply_builtin_(frame);
   }
-}
-
-bool HDMICEC::is_claimed(uint8_t opcode) {
-#ifdef HDMI_CEC_CLAIMED_OPCODE_COUNT
-  for (uint8_t i = 0; i < HDMI_CEC_CLAIMED_OPCODE_COUNT; i++) {
-    if (progmem_read_byte(&CLAIMED_OPCODES[i]) == opcode) {
-      return true;
-    }
-  }
-#endif
-  return false;
 }
 
 void HDMICEC::reply_builtin_(const Frame *frame) {
@@ -170,17 +159,15 @@ void HDMICEC::reply_builtin_(const Frame *frame) {
         // Reported to everybody, with the device type the logical address stands for
         this->send(Frame::BROADCAST_ADDRESS,
                    {OPCODE_REPORT_PHYSICAL_ADDRESS, static_cast<uint8_t>(this->physical_address_ >> 8),
-                    static_cast<uint8_t>(this->physical_address_), device_type_of(this->address_)});
+                    static_cast<uint8_t>(this->physical_address_), this->device_type_});
         return;
       }
       break;
 #ifdef HDMI_CEC_OSD_NAME_LENGTH
-    case OPCODE_GIVE_OSD_NAME: {
-      uint8_t reply[1 + HDMI_CEC_OSD_NAME_LENGTH] = {OPCODE_SET_OSD_NAME};
-      progmem_memcpy(reply + 1, OSD_NAME, HDMI_CEC_OSD_NAME_LENGTH);
-      this->send(source, std::span<const uint8_t>(reply, sizeof(reply)));
+    case OPCODE_GIVE_OSD_NAME:
+      this->send(source, std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(OSD_NAME_REPLY),
+                                                  1 + HDMI_CEC_OSD_NAME_LENGTH));
       return;
-    }
 #endif
     default:
       break;
@@ -214,7 +201,9 @@ bool HDMICEC::send(uint8_t source, uint8_t destination, std::span<const uint8_t>
   }
   *frame = Frame(source, destination, payload);
   this->send_queue_.push_back();
-  this->enable_loop_soon_any_context();
+  // Not enable_loop_soon_any_context(): send() is only called on the main loop (automations, lambdas
+  // and the built-in replies), where this re-enables a sleeping loop at once
+  this->enable_loop();
   return true;
 }
 
@@ -311,38 +300,44 @@ bool HDMICEC::transmit_frame_(const Frame *frame) {
   return true;
 }
 
-#ifdef USE_HDMI_CEC_UART
-void HDMICEC::transmit_body_(const Frame *frame) {
-  // At 2083 baud one UART byte (start bit, 8 data bits, stop bit) spans two CEC bits of five UART
-  // bits each. The UART start bit is low and its stop bit high, so a byte always begins the first
-  // CEC bit low and ends the second one high; the data bits, sent least significant first, fill in
-  // the rest: a logical 0 is low for three UART bits, a logical 1 for one.
+/// The bits sent for frame byte i, highest first from bit frame_first_bit(i): the byte, its end of
+/// message bit and the acknowledge bit (sent high, the receiver pulls it low)
+static uint16_t frame_bits(std::span<const uint8_t> bytes, size_t i) {
+  return (static_cast<uint16_t>(bytes[i]) << 2) | (i == bytes.size() - 1 ? 0x2 : 0) | 0x1;
+}
+/// The header starts after its initiator address bits
+static int8_t frame_first_bit(size_t i) { return i == 0 ? 5 : 9; }
+
+// At 2083 baud one UART byte (start bit, 8 data bits, stop bit) spans two CEC bits of five UART
+// bits each. The UART start bit is low and its stop bit high, so a byte always begins the first
+// CEC bit low and ends the second one high; the data bits, sent least significant first, fill in
+// the rest: a logical 0 is low for three UART bits, a logical 1 for one.
+size_t encode_uart_body(const Frame &frame, uint8_t *out) {
   static const uint8_t TWO_BITS_TO_UART_BYTE[4] PROGMEM = {0x8C, 0xEC, 0x8F, 0xEF};  // 00, 01, 10, 11
-  uint8_t data[Frame::MAX_LENGTH * 5 - 2];  // ten CEC bits per byte, two per UART byte, minus the address
   size_t length = 0;
-  const auto bytes = frame->bytes();
-  for (size_t byte_inx = 0; byte_inx < bytes.size(); byte_inx++) {
-    // The byte, its end of message bit and the acknowledge bit (sent high, the receiver pulls it low)
-    const uint16_t block =
-        (static_cast<uint16_t>(bytes[byte_inx]) << 2) | (byte_inx == bytes.size() - 1 ? 0x2 : 0) | 0x1;
-    // The header starts after its initiator address bits
-    for (int8_t pair = (byte_inx == 0 ? 2 : 4); pair >= 0; pair--) {
-      data[length++] = progmem_read_byte(&TWO_BITS_TO_UART_BYTE[(block >> (2 * pair)) & 0x3]);
+  const auto bytes = frame.bytes();
+  for (size_t i = 0; i < bytes.size(); i++) {
+    const uint16_t bits = frame_bits(bytes, i);
+    for (int8_t pair = frame_first_bit(i) / 2; pair >= 0; pair--) {
+      out[length++] = progmem_read_byte(&TWO_BITS_TO_UART_BYTE[(bits >> (2 * pair)) & 0x3]);
     }
   }
-  this->uart_->write_array(data, length);
+  return length;
+}
+
+#ifdef USE_HDMI_CEC_UART
+void HDMICEC::transmit_body_(const Frame *frame) {
+  uint8_t data[MAX_UART_BODY_LENGTH];
+  this->uart_->write_array(data, encode_uart_body(*frame, data));
 }
 #else
 void HDMICEC::transmit_body_(const Frame *frame) {
   const auto bytes = frame->bytes();
-  for (size_t byte_inx = 0; byte_inx < bytes.size(); byte_inx++) {
-    // The header starts after its initiator address bits
-    for (int8_t i = (byte_inx == 0 ? 3 : 7); i >= 0; i--) {
-      this->send_bit_((bytes[byte_inx] >> i) & 0x1);
+  for (size_t i = 0; i < bytes.size(); i++) {
+    const uint16_t bits = frame_bits(bytes, i);
+    for (int8_t bit = frame_first_bit(i); bit >= 0; bit--) {
+      this->send_bit_((bits >> bit) & 0x1);
     }
-    // End of message bit, then the acknowledge bit which the receiver may pull low
-    this->send_bit_(byte_inx == bytes.size() - 1);
-    this->send_bit_(true);
   }
 }
 #endif
