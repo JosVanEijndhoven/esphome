@@ -61,7 +61,8 @@ Frame::Frame(uint8_t initiator_addr, uint8_t destination_addr, const uint8_t *pa
   this->data_[0] = ((initiator_addr & 0xf) << 4) | (destination_addr & 0xf);
   payload_size = std::min(payload_size, static_cast<unsigned int>(Frame::MAX_PAYLOAD_LENGTH));
   this->size_ = 1 + payload_size;
-  std::memcpy(this->data_.data() + 1, payload, payload_size);
+  // the payload may be a flash table (hdmi_cec.send); progmem_memcpy reads RAM too
+  progmem_memcpy(this->data_.data() + 1, payload, payload_size);
 }
 
 void HDMICEC::setup() {

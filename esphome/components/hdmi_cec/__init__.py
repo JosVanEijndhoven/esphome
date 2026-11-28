@@ -47,6 +47,16 @@ hdmi_cec_ns = cg.esphome_ns.namespace("hdmi_cec")
 HDMICEC = hdmi_cec_ns.class_("HDMICEC", cg.Component)
 _PAYLOAD_SPAN = cg.std_span.template(cg.uint8.operator("const"))
 _PAYLOAD_VECTOR = cg.std_vector.template(cg.uint8)
+
+
+def _payload_span(config: ConfigType, value: list[int]) -> str:
+    # a constant payload stays in a shared flash table
+    if not value:
+        return str(cg.byte_span())
+    table = automation.progmem_bytes("hdmi_cec_send", value)
+    return str(cg.byte_span(table, len(value)))
+
+
 _MESSAGE_ARGS = [
     (cg.uint8, "source"),
     (cg.uint8, "destination"),
@@ -245,7 +255,7 @@ automation.register_apply_action(
     ),
     automation.ApplyCall(
         "send({}, {})",
-        ((CONF_DESTINATION, cg.uint8), (CONF_DATA, _PAYLOAD_VECTOR)),
+        ((CONF_DESTINATION, cg.uint8), (CONF_DATA, _PAYLOAD_VECTOR, _payload_span)),
     ),
 )
 
@@ -265,7 +275,7 @@ automation.register_apply_action(
         (
             (CONF_SOURCE, cg.uint8),
             (CONF_DESTINATION, cg.uint8),
-            (CONF_DATA, _PAYLOAD_VECTOR),
+            (CONF_DATA, _PAYLOAD_VECTOR, _payload_span),
         ),
     ),
 )
