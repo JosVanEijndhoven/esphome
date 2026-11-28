@@ -5,6 +5,9 @@
 #ifdef USE_HDMI_CEC_UART
 #include "esphome/components/uart/uart_component.h"
 #endif
+#ifdef USE_HDMI_CEC_DECODER
+#include "cec_decoder.h"
+#endif
 #ifdef USE_ESP8266
 #include <Arduino.h>
 #endif
@@ -106,6 +109,24 @@ Frame::Frame(uint8_t initiator_addr, uint8_t destination_addr, std::span<const u
   }
 }
 
+int Frame::to_text(char *line, unsigned int line_size) const {
+  if (!line || !line_size || !this->size())
+    return 0;
+
+  unsigned int length = 0;
+  if (format_hex_pretty_size(this->size()) <= line_size) {
+    format_hex_pretty_to(line, this->bytes().data(), this->size());
+    length = format_hex_pretty_size(this->size()) - 1;
+  }
+#ifdef USE_HDMI_CEC_DECODER
+  length = buf_append_printf(line, line_size, length, ": ");
+  Decoder decoder(*this, line + length, line_size - length);
+  length += decoder.decode();
+#endif
+
+  return length;
+}
+
 void HDMICEC::setup() {
   // The line is open drain with a weak pull-up: driven low to send, released to read
   this->pin_->setup();
@@ -138,6 +159,11 @@ void HDMICEC::dump_config() {
   }
 #ifdef HDMI_CEC_OSD_NAME_LENGTH
   ESP_LOGCONFIG(TAG, "  OSD name: %s", LOG_STR_ARG(OSD_NAME_REPLY + 1));
+#endif
+#ifdef USE_HDMI_CEC_DECODER
+  ESP_LOGCONFIG(TAG, "  Decode messages: True");
+#else
+  ESP_LOGCONFIG(TAG, "  Decode messages: False");
 #endif
 #ifdef USE_HDMI_CEC_UART
   ESP_LOGCONFIG(TAG, "  Transmit: UART");
@@ -294,7 +320,8 @@ void HDMICEC::transmit_message_() {
 #ifdef ESPHOME_LOG_HAS_DEBUG
   if (this->transmit_attempts_ == 1) {
     char line[format_hex_pretty_size(Frame::MAX_LENGTH)];
-    ESP_LOGD(TAG, "Sending: %s", format_hex_pretty_to(line, frame->bytes().data(), frame->size()));
+    format_hex_pretty_to(line, frame->bytes().data(), frame->size());
+    ESP_LOGD(TAG, "Sending: %s", );
   }
 #endif
   // The interrupt counts the bytes and acknowledge bits of our own frame

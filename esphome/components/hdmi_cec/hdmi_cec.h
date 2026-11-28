@@ -58,6 +58,8 @@ class Frame {
   /// The payload, in RAM or flash, is at most MAX_PAYLOAD_LENGTH bytes; send() checks that
   Frame(uint8_t initiator_addr, uint8_t destination_addr, std::span<const uint8_t> payload);
 
+  /// Convert to text, return the number of chars written into 'line'.
+  int Frame::to_text(char *line, unsigned int line_size) const;
   ESPHOME_ALWAYS_INLINE uint8_t initiator_addr() const { return this->data_[0] >> 4; }
   ESPHOME_ALWAYS_INLINE uint8_t destination_addr() const { return this->data_[0] & 0xf; }
   ESPHOME_ALWAYS_INLINE bool is_broadcast() const { return this->destination_addr() == BROADCAST_ADDRESS; }

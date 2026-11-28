@@ -42,11 +42,15 @@ CONF_MONITOR_MODE = "monitor_mode"
 CONF_OPCODE = "opcode"
 CONF_PHYSICAL_ADDRESS = "physical_address"
 CONF_OSD_NAME = "osd_name"
+<<<<<<< HEAD
 # The CEC device type of each logical address, for <Report Physical Address>: 0 TV, 1 recording
 # device, 3 tuner, 4 playback device, 5 audio system; reserved, specific use and unregistered count
 # as playback
 _DEVICE_TYPES = (0, 1, 1, 3, 4, 5, 3, 3, 4, 1, 3, 4, 4, 4, 4, 4)
 _OPCODE_SET_OSD_NAME = "\x47"  # 'G'
+=======
+CONF_DECODE_MESSAGES = "decode_messages"
+>>>>>>> edf1c71bbc (Initial addition of cec_decoder, further edits required)
 
 hdmi_cec_ns = cg.esphome_ns.namespace("hdmi_cec")
 HDMICEC = hdmi_cec_ns.class_("HDMICEC", cg.Component)
@@ -122,6 +126,7 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_UART_ID): cv.use_id(uart.UARTComponent),
             cv.Optional(CONF_PROMISCUOUS_MODE, default=False): cv.boolean,
             cv.Optional(CONF_MONITOR_MODE, default=False): cv.boolean,
+            cv.Optional(CONF_DECODE_MESSAGES, default=True): cv.boolean,
             cv.Optional(CONF_ON_MESSAGE): automation.validate_automation(
                 {
                     cv.Optional(CONF_SOURCE): logical_address,
@@ -217,6 +222,8 @@ async def to_code(config: ConfigType) -> None:
             _OPCODE_SET_OSD_NAME + osd_name,
         )
         cg.add_define("HDMI_CEC_OSD_NAME_LENGTH", len(osd_name))
+    if config[CONF_DECODE_MESSAGES]:
+        cg.add_define("USE_HDMI_CEC_DECODER")
     if (uart_id := config.get(CONF_UART_ID)) is not None:
         cg.add_define("USE_HDMI_CEC_UART")
         cg.add(var.set_uart(await cg.get_variable(uart_id)))
